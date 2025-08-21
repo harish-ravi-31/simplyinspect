@@ -1,0 +1,51 @@
+# SimplyInspect Python Requirements
+
+# Core frameworks
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+gunicorn==21.2.0
+
+# Database
+asyncpg==0.29.0
+psycopg2-binary==2.9.9
+
+# Azure/Microsoft integrations
+azure-identity==1.14.1
+azure-storage-blob==12.19.0
+msal==1.25.0
+aiohttp==3.9.1
+requests==2.31.0
+
+# SharePoint
+Office365-REST-Python-Client==2.5.3
+sharepoint==0.4.2
+
+# Data processing
+pydantic==2.5.2
+python-dateutil==2.8.2
+pytz==2023.3
+croniter==2.0.1
+
+# Authentication and security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+# bcrypt 4.x removes __about__, which passlib 1.7.4 tries to read → pin to 3.x
+bcrypt==3.2.2
+email-validator==2.1.0
+
+# Utilities
+python-dotenv==1.0.0
+python-multipart==0.0.6
+
+# Logging and monitoring
+structlog==23.2.0
+
+# PDF Generation
+reportlab==4.0.7
+matplotlib==3.8.2
+
+# Email notifications
+aiosmtplib==3.0.1
+
+# Scheduling
+apscheduler==3.10.4

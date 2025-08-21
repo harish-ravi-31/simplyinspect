@@ -1,0 +1,312 @@
+# azure-resource-setup.yml
+name: Azure Resource Setup
+
+on: [push]
+
+env:
+  RESOURCE_GROUP: demo-simplydiscover # TODO: Change this as necessary
+  PREFIX: demosd01
+  LOCATION: uksouth
+  YAML_FILE: aci-deploy.yaml
+  PYTHON_API_KEY: 30e71eff-21f3-460c-a2b5-6854d5fd1907
+  LOG_LEVEL: INFO
+  DB_HOST: demosd01pgsql01.postgres.database.azure.com
+  DB_NAME: SimplyDiscover
+  DB_USER: postgres
+  DB_PASSWORD: SDoiunr221oiD
+  ConnectionStrings__DefaultConnection: "Host=demosd01pgsql01.postgres.database.azure.com;Database=SimplyDiscover;Username=postgres;Password=SDoiunr221oiD;SslMode=Require"
+  ALLOWED_CORS_ORIGINS: http://localhost:8080,http://localhost:8000,http://simply-discover-portal-demosd01.uksouth.cloudapp.azure.com
+  JWT_ISSUER: http://simply-discover-portal-demosd01.uksouth.cloudapp.azure.com
+  JWT_AUDIENCE: http://simply-discover-portal-demosd01.uksouth.cloudapp.azure.com
+  BASE_URL: http://dotnet-app.internal.lan
+  AZURE_SUBSCRIPTION_ID: b569cae0-4604-4b40-ac7c-dffe2e5afc88 # TODO: Change this as necessary
+  DNS_NAME_LABEL: simply-discover-portal-demosd01
+
+jobs:
+  setup-azure-resources:
+    runs-on: ubuntu-latest
+    steps:
+
+      - name: Clear Cache
+        uses: actions/cache@v2
+        with:
+          path: |
+            ~/.npm
+            ~/.cache
+            ~/.m2
+            ~/.ivy2
+            ~/.sbt
+          key: ${{ runner.os }}-clear-cache-${{ github.run_id }}
+
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }} # TODO: Replace with secrets from customer
+
+      - name: Create Resource Group # TODO: Remove this section as necessary
+        run: |
+          az group create --name ${{ env.RESOURCE_GROUP }} --location ${{ env.LOCATION }}
+          
+      - name: Create Virtual Network
+        run: |
+          VNET_NAME="${{ env.PREFIX }}vnet"
+          az network vnet create --name $VNET_NAME --resource-group ${{ env.RESOURCE_GROUP }} --location ${{ env.LOCATION }} --address-prefix 10.0.0.0/16
+      - name: Create Subnets
+        run: |
+          VNET_NAME="${{ env.PREFIX }}vnet"
+          # Delegate subnet1 to Microsoft.ContainerInstance
+          az network vnet subnet create \
+            --vnet-name $VNET_NAME \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${VNET_NAME}-subnet1 \
+            --address-prefix 10.0.1.0/24 \
+            --delegations Microsoft.ContainerInstance/containerGroups
+          az network vnet subnet create \
+            --vnet-name $VNET_NAME \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${VNET_NAME}-subnet2 \
+            --address-prefix 10.0.2.0/24
+          az network vnet subnet create \
+            --vnet-name $VNET_NAME \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${VNET_NAME}-subnet3 \
+            --address-prefix 10.0.3.0/24
+      - name: Create Network Security Group
+        id: create-nsg
+        run: |
+          NSG_NAME="${{ env.PREFIX }}-nsg"
+          az network nsg create --resource-group ${{ env.RESOURCE_GROUP }} --name $NSG_NAME --location ${{ env.LOCATION }}
+          echo "nsg_name=$NSG_NAME" >> $GITHUB_OUTPUT
+    
+      - name: Associate NSG with Subnet1
+        run: |
+          VNET_NAME="${{ env.PREFIX }}vnet"
+          NSG_NAME="${{ steps.create-nsg.outputs.nsg_name }}"
+          az network vnet subnet update --vnet-name $VNET_NAME --resource-group ${{ env.RESOURCE_GROUP }} --name ${VNET_NAME}-subnet1 --network-security-group $NSG_NAME
+      - name: Allow Port 80 Traffic from Azure Frontdoor Backend
+        run: |
+          NSG_NAME="${{ env.PREFIX }}-nsg"
+          az network nsg rule create \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --nsg-name $NSG_NAME \
+            --name Allow-Frontdoor-Backend \
+            --priority 100 \
+            --direction Inbound \
+            --access Allow \
+            --protocol Tcp \
+            --source-address-prefixes AzureFrontDoor.Backend \
+            --destination-port-ranges 80
+  
+      - name: Allow Port 80 Traffic from Azure Frontdoor Frontend
+        run: |
+          NSG_NAME="${{ env.PREFIX }}-nsg"
+          az network nsg rule create \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --nsg-name $NSG_NAME \
+            --name Allow-Frontdoor-Frontend \
+            --priority 200 \
+            --direction Inbound \
+            --access Allow \
+            --protocol Tcp \
+            --source-address-prefixes AzureFrontDoor.Frontend \
+            --destination-port-ranges 80
+  
+      - name: Deny All Traffic on Port 80
+        run: |
+          NSG_NAME="${{ env.PREFIX }}-nsg"
+          az network nsg rule create \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --nsg-name $NSG_NAME \
+            --name Deny-All-Port-80 \
+            --priority 300 \
+            --direction Inbound \
+            --access Deny \
+            --protocol Tcp \
+            --destination-port-ranges 80
+      - name: Get Subnet IDs
+        id: get-subnet-ids
+        run: |
+          VNET_NAME="${{ env.PREFIX }}vnet"
+          VNET_ID=$(az network vnet show --name $VNET_NAME --resource-group ${{ env.RESOURCE_GROUP }} --query id --output tsv)
+          SUBNET1_ID=$(az network vnet subnet show --vnet-name $VNET_NAME --resource-group ${{ env.RESOURCE_GROUP }} --name ${VNET_NAME}-subnet1 --query id --output tsv)
+          SUBNET2_ID=$(az network vnet subnet show --vnet-name $VNET_NAME --resource-group ${{ env.RESOURCE_GROUP }} --name ${VNET_NAME}-subnet2 --query id --output tsv)
+          SUBNET3_ID=$(az network vnet subnet show --vnet-name $VNET_NAME --resource-group ${{ env.RESOURCE_GROUP }} --name ${VNET_NAME}-subnet3 --query id --output tsv)
+          echo VNET ID: $VNET_ID
+          echo "Subnet 1 ID: $SUBNET1_ID"
+          echo "Subnet 2 ID: $SUBNET2_ID"
+          echo "Subnet 3 ID: $SUBNET3_ID"
+          echo "vnet_id=$VNET_ID" >> $GITHUB_OUTPUT
+          echo "subnet1_id=$SUBNET1_ID" >> $GITHUB_OUTPUT
+          echo "subnet2_id=$SUBNET2_ID" >> $GITHUB_OUTPUT
+          echo "subnet3_id=$SUBNET3_ID" >> $GITHUB_OUTPUT
+      - name: Create Public IP for Load Balancer
+        id: create-public-ip
+        run: |
+          az network public-ip create \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name "${{ env.PREFIX }}PublicIP" \
+            --dns-name ${{ env.DNS_NAME_LABEL }} \
+            --allocation-method Static \
+            --sku Standard
+          PUBLIC_IP_ID=$(az network public-ip show --resource-group ${{ env.RESOURCE_GROUP }} --name "${{ env.PREFIX }}PublicIP" --query id --output tsv)
+          echo "public_ip_id=$PUBLIC_IP_ID" >> $GITHUB_OUTPUT
+      - name: Create Load Balancer
+        id: create-load-balancer
+        run: |
+          az network lb create \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name "${{ env.PREFIX }}LoadBalancer" \
+            --sku Standard \
+            --frontend-ip-name "${{ env.PREFIX }}FrontendIP" \
+            --backend-pool-name "${{ env.PREFIX }}BackendPool" \
+            --public-ip-address ${{ steps.create-public-ip.outputs.public_ip_id }}
+      - name: Create Health Probe for Load Balancer
+        run: |
+          az network lb probe create \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --lb-name "${{ env.PREFIX }}LoadBalancer" \
+            --name "${{ env.PREFIX }}HealthProbe" \
+            --protocol http \
+            --port 80 \
+            --path /health \
+            --interval 5 \
+            --threshold 2
+      - name: Create Storage Account
+        id: create-storage-account
+        run: |
+          STORAGE_ACCOUNT_NAME="${{ env.PREFIX }}storage"
+          echo "STORAGE_ACCOUNT_NAME=$STORAGE_ACCOUNT_NAME" >> $GITHUB_OUTPUT
+          az storage account create --name $STORAGE_ACCOUNT_NAME --resource-group ${{ env.RESOURCE_GROUP }} --location ${{ env.LOCATION }} --sku Standard_LRS
+      - name: Create File Share
+        run: |
+          STORAGE_ACCOUNT_NAME="${{ env.PREFIX }}storage"
+          az storage share-rm create --resource-group ${{ env.RESOURCE_GROUP }} --storage-account $STORAGE_ACCOUNT_NAME --name sharedstorage
+          az storage share-rm create --resource-group ${{ env.RESOURCE_GROUP }} --storage-account $STORAGE_ACCOUNT_NAME --name exportstorage
+      - name: Get Storage Account Key
+        id: get-storage-key
+        run: |
+          STORAGE_ACCOUNT_NAME="${{ env.PREFIX }}storage"
+          STORAGE_KEY=$(az storage account keys list --resource-group ${{ env.RESOURCE_GROUP }} --account-name $STORAGE_ACCOUNT_NAME --query "[0].value" --output tsv)
+          echo "Storage account access key: $STORAGE_KEY"
+          echo "storage_key=$STORAGE_KEY" >> $GITHUB_OUTPUT
+      - name: Create Private DNS Zone for Storage Account
+        run: |
+          DNS_ZONE_NAME="privatelink.blob.core.windows.net"
+          az network private-dns zone create --resource-group ${{ env.RESOURCE_GROUP }} --name $DNS_ZONE_NAME
+          az network private-dns link vnet create --resource-group ${{ env.RESOURCE_GROUP }} --zone-name $DNS_ZONE_NAME --name "${{ env.PREFIX }}-dns-link" --virtual-network ${{ steps.get-subnet-ids.outputs.vnet_id }} --registration-enabled false
+      - name: Create Private Endpoint for Storage Account
+        id: create-storage-pe
+        run: |
+          VNET_NAME="${{ env.PREFIX }}vnet"
+          STORAGE_ACCOUNT_NAME="${{ env.PREFIX }}storage"
+          STORAGE_ACCOUNT_ID=$(az storage account show --name $STORAGE_ACCOUNT_NAME --resource-group ${{ env.RESOURCE_GROUP }} --query id --output tsv)
+          echo "Storage account resource ID: $STORAGE_ACCOUNT_ID"
+          echo "storage_account_id=$STORAGE_ACCOUNT_ID" >> $GITHUB_OUTPUT
+          SUBNET2_ID="${{ steps.get-subnet-ids.outputs.subnet2_id }}"
+          DNS_ZONE_NAME="privatelink.blob.core.windows.net"
+          az network private-endpoint create --name "${{ env.PREFIX }}-storage-pe" --resource-group ${{ env.RESOURCE_GROUP }} --vnet-name $VNET_NAME --subnet $SUBNET2_ID --private-connection-resource-id $STORAGE_ACCOUNT_ID --group-id blob --connection-name "${{ env.PREFIX }}-storage-connection"
+          PRIVATE_IP=$(az network private-endpoint show --name "${{ env.PREFIX }}-storage-pe" --resource-group ${{ env.RESOURCE_GROUP }} --query 'customDnsConfigs[0].ipAddresses[0]' --output tsv)   
+          az network private-dns record-set a create --resource-group ${{ env.RESOURCE_GROUP }} --zone-name $DNS_ZONE_NAME --name $STORAGE_ACCOUNT_NAME
+          az network private-dns record-set a add-record --resource-group ${{ env.RESOURCE_GROUP }} --zone-name $DNS_ZONE_NAME --record-set-name $STORAGE_ACCOUNT_NAME --ipv4-address $PRIVATE_IP
+      - name: Create Postgres Flexible Server
+        id: create-postgres-server
+        run: |
+          PG_SERVER_NAME="${{ env.PREFIX }}pgsql01"
+          echo "PG_SERVER_NAME=$PG_SERVER_NAME" >> $GITHUB_OUTPUT
+          az postgres flexible-server create \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name $PG_SERVER_NAME \
+            --admin-user ${{ env.DB_USER }} \
+            --admin-password ${{ env.DB_PASSWORD }} \
+            --sku-name Standard_B1ms \
+            --version 13 \
+            --tier Burstable \
+            --location ${{ env.LOCATION }} \
+            --password-auth Enabled \
+            --yes
+      - name: Create Private DNS Zone for Postgres
+        run: |
+          DNS_ZONE_NAME="privatelink.postgres.database.azure.com"
+          az network private-dns zone create --resource-group ${{ env.RESOURCE_GROUP }} --name $DNS_ZONE_NAME
+          az network private-dns link vnet create --resource-group ${{ env.RESOURCE_GROUP }} --zone-name $DNS_ZONE_NAME --name "${{ env.PREFIX }}-dns-link" --virtual-network ${{ steps.get-subnet-ids.outputs.vnet_id }} --registration-enabled false
+      - name: Create Private Endpoint for Postgres
+        id: create-postgres-server-endpoint
+        run: |
+          VNET_NAME="${{ env.PREFIX }}vnet"
+          PG_SERVER_NAME="${{ env.PREFIX }}pgsql01"
+          PGSERVER_ID=$(az postgres flexible-server show --name $PG_SERVER_NAME --resource-group ${{ env.RESOURCE_GROUP }} --query id --output tsv)
+          echo "Postgres Server resource ID: $PGSERVER_ID"
+          echo "pgserver_id=$PGSERVER_ID" >> $GITHUB_OUTPUT
+          SUBNET2_ID="${{ steps.get-subnet-ids.outputs.subnet2_id }}"
+          DNS_ZONE_NAME="privatelink.postgres.database.azure.com"
+          az network private-endpoint create --name "${{ env.PREFIX }}-postgres-pe" --resource-group ${{ env.RESOURCE_GROUP }} --vnet-name $VNET_NAME --subnet $SUBNET2_ID --private-connection-resource-id $PGSERVER_ID --group-id postgresqlServer --connection-name "${{ env.PREFIX }}-postgres-connection"
+          PRIVATE_IP=$(az network private-endpoint show --name "${{ env.PREFIX }}-postgres-pe" --resource-group ${{ env.RESOURCE_GROUP }} --query 'customDnsConfigs[0].ipAddresses[0]' --output tsv)
+          az network private-dns record-set a create --resource-group ${{ env.RESOURCE_GROUP }} --zone-name $DNS_ZONE_NAME --name $PG_SERVER_NAME
+          az network private-dns record-set a add-record --resource-group ${{ env.RESOURCE_GROUP }} --zone-name $DNS_ZONE_NAME --record-set-name $PG_SERVER_NAME --ipv4-address $PRIVATE_IP
+      - name: Replace placeholders in aci-deploy.yaml
+        run: |
+          sed -i 's|__LOG_LEVEL__|'"${{ env.LOG_LEVEL }}"'|g' ${{ env.YAML_FILE }}
+          sed -i 's|__PYTHON_API_KEY__|'"${{ env.PYTHON_API_KEY }}"'|g' ${{ env.YAML_FILE }}
+          sed -i 's|__DB_HOST__|'"${{ env.DB_HOST }}"'|g' ${{ env.YAML_FILE }}
+          sed -i 's|__DB_NAME__|'"${{ env.DB_NAME }}"'|g' ${{ env.YAML_FILE }}
+          sed -i 's|__DB_USER__|'"${{ env.DB_USER }}"'|g' ${{ env.YAML_FILE }}
+          sed -i 's|__DB_PASSWORD__|'"${{ env.DB_PASSWORD }}"'|g' ${{ env.YAML_FILE }}
+          sed -i 's|__DEFAULT_CONNECTION_STRING__|'"${{ env.ConnectionStrings__DefaultConnection }}"'|g' ${{ env.YAML_FILE }}
+          sed -i 's|__ALLOWED_CORS_ORIGINS__|'"${{ env.ALLOWED_CORS_ORIGINS }}"'|g' ${{ env.YAML_FILE }}
+          sed -i 's|__JWT_ISSUER__|'"${{ env.JWT_ISSUER }}"'|g' ${{ env.YAML_FILE }}
+          sed -i 's|__JWT_AUDIENCE__|'"${{ env.JWT_AUDIENCE }}"'|g' ${{ env.YAML_FILE }}
+          sed -i 's|__BASE_URL__|'"${{ env.BASE_URL }}"'|g' ${{ env.YAML_FILE }}
+          sed -i 's|__SUBNET_ID_ACI__|'"${{ steps.get-subnet-ids.outputs.subnet1_id }}"'|g' ${{ env.YAML_FILE }}
+          sed -i 's|__STORAGE_ACCOUNT_NAME__|'"${{ steps.create-storage-account.outputs.STORAGE_ACCOUNT_NAME }}"'|g' ${{ env.YAML_FILE }}
+          sed -i 's|__STORAGE_KEY__|'"${{ steps.get-storage-key.outputs.storage_key }}"'|g' ${{ env.YAML_FILE }}
+          sed -i 's|__CONTAINER_GROUP_NAME__|'"${{ env.PREFIX }}-container-group"'|g' ${{ env.YAML_FILE }}
+          sed -i 's|__LOCATION__|'"${{ env.LOCATION }}"'|g' ${{ env.YAML_FILE }}
+      - name: Deploy Azure Container Group
+        id: deploy-container-group
+        run: |
+          az container create \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --file ${{ env.YAML_FILE }}
+      - name: Add Container Group IP to Backend Pool
+        run: |
+          CONTAINER_IP=$(az container show --resource-group ${{ env.RESOURCE_GROUP }} --name "${{ env.PREFIX }}-container-group" --query ipAddress.ip --output tsv)
+          echo "container_ip=$CONTAINER_IP" >> $GITHUB_OUTPUT
+          az network lb address-pool address add \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --lb-name "${{ env.PREFIX }}LoadBalancer" \
+            --pool-name "${{ env.PREFIX }}BackendPool" \
+            --vnet ${{ steps.get-subnet-ids.outputs.vnet_id }} \
+            --ip-address $CONTAINER_IP \
+            --name "ContainerGroupIP"
+      - name: Create Routing Rule for Load Balancer
+        run: |
+          az network lb rule create \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --lb-name "${{ env.PREFIX }}LoadBalancer" \
+            --name "${{ env.PREFIX }}RoutingRule" \
+            --protocol tcp \
+            --frontend-port 80 \
+            --backend-port 80 \
+            --frontend-ip-name "${{ env.PREFIX }}FrontendIP" \
+            --backend-pool-name "${{ env.PREFIX }}BackendPool" \
+            --probe-name "${{ env.PREFIX }}HealthProbe"
+      - name: Create Private DNS Zone for internal.lan
+        run: |
+          DNS_ZONE_NAME="internal.lan"
+          az network private-dns zone create --resource-group ${{ env.RESOURCE_GROUP }} --name $DNS_ZONE_NAME
+          az network private-dns link vnet create --resource-group ${{ env.RESOURCE_GROUP }} --zone-name $DNS_ZONE_NAME --name "${{ env.PREFIX }}-internal-dns-link" --virtual-network ${{ steps.get-subnet-ids.outputs.vnet_id }} --registration-enabled true
+    
+      - name: Add DNS Record for Container in internal.lan
+        run: |
+          DNS_ZONE_NAME="internal.lan"
+          CONTAINER_IP=$(az container show --resource-group ${{ env.RESOURCE_GROUP }} --name "${{ env.PREFIX }}-container-group" --query ipAddress.ip --output tsv)
+          echo "container_ip=$CONTAINER_IP" >> $GITHUB_OUTPUT
+          az network private-dns record-set a create --resource-group ${{ env.RESOURCE_GROUP }} --zone-name $DNS_ZONE_NAME --name python-app
+          az network private-dns record-set a create --resource-group ${{ env.RESOURCE_GROUP }} --zone-name $DNS_ZONE_NAME --name dotnet-app
+          az network private-dns record-set a create --resource-group ${{ env.RESOURCE_GROUP }} --zone-name $DNS_ZONE_NAME --name rabbitmq
+          az network private-dns record-set a add-record --resource-group ${{ env.RESOURCE_GROUP }} --zone-name $DNS_ZONE_NAME --record-set-name python-app --ipv4-address $CONTAINER_IP
+          az network private-dns record-set a add-record --resource-group ${{ env.RESOURCE_GROUP }} --zone-name $DNS_ZONE_NAME --record-set-name rabbitmq --ipv4-address $CONTAINER_IP
+          az network private-dns record-set a add-record --resource-group ${{ env.RESOURCE_GROUP }} --zone-name $DNS_ZONE_NAME --record-set-name dotnet-app --ipv4-address $CONTAINER_IP

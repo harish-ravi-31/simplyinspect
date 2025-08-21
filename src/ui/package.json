@@ -1,0 +1,28 @@
+{
+  "name": "simplyinspect-ui",
+  "version": "1.0.0",
+  "description": "SimplyInspect - SharePoint and Purview inspection tool",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "serve": "vite preview"
+  },
+  "dependencies": {
+    "vue": "^3.3.13",
+    "vue-router": "^4.2.5",
+    "vuetify": "^3.4.9",
+    "@mdi/font": "^7.4.47",
+    "axios": "^1.6.2",
+    "dayjs": "^1.11.10",
+    "chart.js": "^4.4.1",
+    "vue-chartjs": "^5.3.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.0",
+    "vite": "^5.0.10",
+    "vite-plugin-vuetify": "^2.0.1",
+    "sass": "^1.69.5"
+  }
+}

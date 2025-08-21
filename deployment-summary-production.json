@@ -1,0 +1,30 @@
+{
+  "deployment": {
+    "name": "simplyinspect-production-20250819-140256",
+    "environment": "production",
+    "resourceGroup": "rg-simplyinspect-prod",
+    "location": "northeurope",
+    "timestamp": "2025-08-19T13:06:23Z"
+  },
+  "resources": {
+    "containerRegistry": "simplyinspectacr.azurecr.io",
+    "database": {
+      "host": "simplyinspect-db-production.postgres.database.azure.com",
+      "name": "simplyinspect",
+      "user": "simplyinspect_admin"
+    },
+    "storageAccount": "stsiproduction576"
+  },
+  "endpoints": {
+    "api": "https://simplyinspect-production-140256-api.northeurope.azurecontainer.io:8000",
+    "ui": "https://simplyinspect-production-140256-ui.northeurope.azurecontainer.io",
+    "swagger": "https://simplyinspect-production-140256-api.northeurope.azurecontainer.io:8000/docs"
+  },
+  "credentials": {
+    "admin": {
+      "email": "admin@simplyinspect.com",
+      "password": "Admin123!",
+      "note": "Please change immediately after first login"
+    }
+  }
+}

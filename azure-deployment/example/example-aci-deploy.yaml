@@ -1,0 +1,128 @@
+# aci-deploy.yaml
+apiVersion: '2021-07-01'
+name: __CONTAINER_GROUP_NAME__
+location: __LOCATION__
+properties:
+  containers:
+    - name: rabbitmq
+      properties:
+        image: hrcontainerstest.azurecr.io/rabbitmq:4-management
+        ports:
+          - port: 15672
+          - port: 5672
+        resources:
+          requests:
+            cpu: 0.25
+            memoryInGb: 1.0
+    - name: python-app
+      properties:
+        image: hrcontainerstest.azurecr.io/python-app:1.2
+        environmentVariables:
+          - name: LOG_LOCATION
+            value: __LOG_LOCATION__
+          - name: LOG_LEVEL
+            value: __LOG_LEVEL__
+          - name: API_KEY
+            value: __PYTHON_API_KEY__
+          - name: DB_HOST
+            value: __DB_HOST__
+          - name: DB_PORT
+            value: "5432" #Can be deleted I believe
+          - name: DB_NAME
+            value: __DB_NAME__
+          - name: DB_USER
+            value: __DB_USER__
+          - name: DB_PASSWORD
+            value: __DB_PASSWORD__
+          - name: HostSettings__BaseUrl
+            value: __BASE_URL__
+        ports:
+          - port: 8000
+        resources:
+          requests:
+            cpu: 0.25
+            memoryInGb: 1.0
+        volumeMounts:
+          - mountPath: /app/eqnoiklq/client/SimplyDiscover/Import/
+            name: sharedstoragevolume
+    - name: celery
+      properties:
+        image: hrcontainerstest.azurecr.io/python-app:1.2
+        command: ['celery', '-A', 'celery_app', 'worker', '--loglevel=info']
+        environmentVariables:
+          - name: LOG_LOCATION
+            value: __LOG_LOCATION__
+          - name: LOG_LEVEL
+            value: __LOG_LEVEL__
+          - name: API_KEY
+            value: __PYTHON_API_KEY__
+          - name: DB_HOST
+            value: __DB_HOST__
+          - name: DB_PORT
+            value: "5432"
+          - name: DB_NAME
+            value: __DB_NAME__
+          - name: DB_USER
+            value: __DB_USER__
+          - name: DB_PASSWORD
+            value: __DB_PASSWORD__
+          - name: HostSettings__BaseUrl
+            value: __BASE_URL__
+        resources:
+          requests:
+            cpu: 1.0
+            memoryInGb: 5.0
+        volumeMounts:
+          - mountPath: /app/eqnoiklq/client/SimplyDiscover/Import/
+            name: sharedstoragevolume
+    - name: dotnet-app
+      properties:
+        image: hrcontainerstest.azurecr.io/dotnet-app:1.2
+        command: ["dotnet", "SimplyDiscover.Server.dll"]
+        environmentVariables:
+          - name: ConnectionStrings__DefaultConnection
+            value: __DEFAULT_CONNECTION_STRING__
+          - name: AllowedCorsOrigins
+            value: __ALLOWED_CORS_ORIGINS__
+          - name: JwtSettings__JwtIssuer
+            value: __JWT_ISSUER__
+          - name: JwtSettings__JwtAudience
+            value: __JWT_AUDIENCE__
+          - name: HostSettings__BaseUrl
+            value: __BASE_URL__
+        ports:
+          - port: 80
+        resources:
+          requests:
+            cpu: 1.0
+            memoryInGb: 8.0
+        volumeMounts:
+          - mountPath: /app/eqnoiklq/client/SimplyDiscover/Import/
+            name: sharedstoragevolume
+          - mountPath: /app/eqnoiklq/client/SimplyDiscover/Export/
+            name: exportstoragevolume
+  osType: Linux
+  subnetIds:
+    - id: __SUBNET_ID_ACI__
+      name: default
+  ipAddress: # Remove this section if its not doing anything?
+    type: Private
+    ip: 10.0.1.5
+    ports:
+      - protocol: tcp
+        port: 80
+  imageRegistryCredentials:
+    - server: hrcontainerstest.azurecr.io
+      username: hrcontainerstest
+      password: YOUR_ACR_PASSWORD_HERE
+  volumes:
+    - name: sharedstoragevolume
+      azureFile:
+        sharename: sharedstorage
+        storageAccountName: __STORAGE_ACCOUNT_NAME__
+        storageAccountKey: __STORAGE_KEY__
+    - name: exportstoragevolume
+      azureFile:
+        sharename: exportstorage
+        storageAccountName: __STORAGE_ACCOUNT_NAME__
+        storageAccountKey: __STORAGE_KEY__

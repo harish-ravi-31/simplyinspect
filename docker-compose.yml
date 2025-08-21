@@ -1,0 +1,63 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: simplyinspect-api
+    ports:
+      - "8001:8000"
+    environment:
+      - DB_HOST=pgvector-postgres-simplyinspect
+      - DB_PORT=5432
+      - DB_NAME=simplyinspect
+      - DB_USER=postgres
+      - DB_PASSWORD=Wa239KpL3dw
+      - JWT_SECRET_KEY=your-secret-key-here-change-in-production-123456789
+    volumes:
+      - ./src:/app/src:ro
+    depends_on:
+      pgvector-postgres:
+        condition: service_healthy
+    networks:
+      - simplyinspect-network
+
+    restart: unless-stopped
+
+  ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.ui
+    container_name: simplyinspect-ui
+    ports:
+      - "3001:80" # Using 3001 to avoid conflict with main app
+    depends_on:
+      - api
+    networks:
+      - simplyinspect-network
+    restart: unless-stopped
+
+  pgvector-postgres:
+    image: postgres-with-pgvector:16
+    container_name: pgvector-postgres-simplyinspect
+    environment:
+      - POSTGRES_DB=simplyinspect
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=Wa239KpL3dw
+    volumes:
+      - pgvector-data:/var/lib/postgresql/data
+    networks:
+      - simplyinspect-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d simplyinspect"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  pgvector-data:
+
+networks:
+  simplyinspect-network:
+    driver: bridge
