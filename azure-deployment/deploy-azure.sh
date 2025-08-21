@@ -505,12 +505,6 @@ properties:
           requests:
             cpu: 2.0
             memoryInGb: 8.0
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 8000
-          periodSeconds: 30
-          failureThreshold: 3
     - name: simplyinspect-ui
       properties:
         image: ${UI_IMAGE}
@@ -654,7 +648,7 @@ WAIT_INTERVAL=15
 
 while [ $ELAPSED -lt $MAX_WAIT_API ]; do
     # Check if API responds to health check
-    HEALTH_STATUS=$(curl -s -w "%{http_code}" "http://${PUBLIC_IP}/api/health" --connect-timeout 5 2>/dev/null || echo "000")
+    HEALTH_STATUS=$(curl -s -w "%{http_code}" "http://${PUBLIC_IP}/health" --connect-timeout 5 2>/dev/null || echo "000")
     if [ "$HEALTH_STATUS" = "200" ]; then
         API_READY=true
         echo "✅ API container is ready and responding"

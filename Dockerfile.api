@@ -18,16 +18,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY src/ ./src/
 COPY migrations/ ./migrations/
 
-# Environment variables (can be overridden)
+# Environment variables
 ENV PYTHONUNBUFFERED=1
-ENV DB_HOST=pgvector-postgres-simplyinspect
-ENV DB_PORT=5432
-ENV DB_NAME=simplyinspect
-ENV DB_USER=postgres
-ENV DB_PASSWORD=Wa239KpL3dw
 
 # Expose port
 EXPOSE 8000
 
 # Run the application
-CMD ["uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8000"]
