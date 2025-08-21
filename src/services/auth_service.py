@@ -24,7 +24,7 @@ class AuthService:
             self.secret_key = self._generate_secret_key()
             
         self.algorithm = "HS256"
-        self.access_token_expire_minutes = 30  # Short-lived access tokens
+        self.access_token_expire_minutes = 60  # Extended from 30 to reduce refresh frequency
         self.refresh_token_expire_days = 7     # Longer-lived refresh tokens
         
         # Password hashing

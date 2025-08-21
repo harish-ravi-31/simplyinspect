@@ -34,23 +34,12 @@ apiClient.interceptors.request.use(
 );
 
 // Response interceptor for error handling
+// Note: 401 handling is done in useAuth.js to avoid conflicts
 apiClient.interceptors.response.use(
   response => response,
   error => {
-    // Handle global error responses
-    if (error.response && error.response.status === 401) {
-      // Handle unauthorized access
-      console.warn('Authentication token expired or invalid');
-      localStorage.removeItem('auth_token');
-      localStorage.removeItem('userRole');
-      
-      // Show a user-friendly message before redirecting
-      const currentPath = window.location.pathname;
-      if (currentPath !== '/login' && currentPath !== '/') {
-        alert('Your session has expired. Please log in again.');
-        window.location.href = '/login';
-      }
-    }
+    // Let useAuth.js handle 401 errors for consistent behavior
+    // Other error handling can be added here if needed
     return Promise.reject(error);
   }
 );

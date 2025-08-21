@@ -5,8 +5,11 @@ import { apiClient } from '../services/api'
 // Global auth state
 const user = ref(null)
 const token = ref(null)
+const refreshToken = ref(null)
+const tokenExpiry = ref(null)
 const isAuthenticated = ref(false)
 const isLoading = ref(false)
+let refreshTimer = null
 
 export function useAuth() {
   
@@ -15,28 +18,146 @@ export function useAuth() {
   const isReviewer = computed(() => user.value?.role === 'reviewer')
   const hasRole = (role) => user.value?.role === role
 
+  // Parse JWT token to get expiry
+  const parseJwt = (token) => {
+    try {
+      const base64Url = token.split('.')[1]
+      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/')
+      const jsonPayload = decodeURIComponent(atob(base64).split('').map((c) => {
+        return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)
+      }).join(''))
+      return JSON.parse(jsonPayload)
+    } catch (error) {
+      console.error('Error parsing JWT:', error)
+      return null
+    }
+  }
+
+  // Check if token is expired or about to expire
+  const isTokenExpiring = (expiryTime, bufferMinutes = 5) => {
+    if (!expiryTime) return true
+    const now = Date.now() / 1000
+    const buffer = bufferMinutes * 60
+    return expiryTime - now <= buffer
+  }
+
+  // Schedule automatic token refresh
+  const scheduleTokenRefresh = () => {
+    // Clear any existing timer
+    if (refreshTimer) {
+      clearTimeout(refreshTimer)
+    }
+
+    if (!tokenExpiry.value || !refreshToken.value) return
+
+    const now = Date.now() / 1000
+    const timeUntilExpiry = tokenExpiry.value - now
+    // Refresh 5 minutes before expiry
+    const refreshIn = Math.max(0, (timeUntilExpiry - 300) * 1000)
+
+    if (refreshIn > 0) {
+      console.log(`Scheduling token refresh in ${refreshIn / 1000} seconds`)
+      refreshTimer = setTimeout(async () => {
+        await refreshAccessToken()
+      }, refreshIn)
+    }
+  }
+
+  // Refresh access token using refresh token
+  const refreshAccessToken = async () => {
+    const storedRefreshToken = refreshToken.value || 
+      localStorage.getItem('refresh_token') || 
+      sessionStorage.getItem('refresh_token')
+
+    if (!storedRefreshToken) {
+      console.log('No refresh token available')
+      clearAuth()
+      return false
+    }
+
+    try {
+      console.log('Refreshing access token...')
+      const response = await axios.post('/api/v1/auth/refresh', {
+        refresh_token: storedRefreshToken
+      })
+
+      const { access_token, expires_in } = response.data
+      
+      // Update token and expiry
+      token.value = access_token
+      const newExpiry = Date.now() / 1000 + expires_in
+      tokenExpiry.value = newExpiry
+
+      // Update storage
+      const storage = localStorage.getItem('auth_token') ? localStorage : sessionStorage
+      storage.setItem('auth_token', access_token)
+      storage.setItem('token_expiry', newExpiry.toString())
+
+      // Update axios headers
+      axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`
+      apiClient.defaults.headers.common['Authorization'] = `Bearer ${access_token}`
+
+      // Schedule next refresh
+      scheduleTokenRefresh()
+
+      console.log('Token refreshed successfully')
+      return true
+    } catch (error) {
+      console.error('Token refresh failed:', error)
+      clearAuth()
+      return false
+    }
+  }
+
   // Initialize auth state from storage
   const initializeAuth = () => {
     const storedToken = localStorage.getItem('auth_token') || sessionStorage.getItem('auth_token')
+    const storedRefresh = localStorage.getItem('refresh_token') || sessionStorage.getItem('refresh_token')
     const storedUser = localStorage.getItem('user_info')
+    const storedExpiry = localStorage.getItem('token_expiry') || sessionStorage.getItem('token_expiry')
 
     if (storedToken && storedUser) {
       try {
         token.value = storedToken
+        refreshToken.value = storedRefresh
         user.value = JSON.parse(storedUser)
-        isAuthenticated.value = true
         
-        // Also ensure userRole is in localStorage for components that need it
-        if (user.value?.role) {
-          localStorage.setItem('userRole', user.value.role)
+        // Parse token to get expiry if not stored
+        if (storedExpiry) {
+          tokenExpiry.value = parseFloat(storedExpiry)
+        } else {
+          const tokenData = parseJwt(storedToken)
+          if (tokenData?.exp) {
+            tokenExpiry.value = tokenData.exp
+          }
         }
-        
-        // Set axios default header for both axios and apiClient
-        axios.defaults.headers.common['Authorization'] = `Bearer ${storedToken}`
-        apiClient.defaults.headers.common['Authorization'] = `Bearer ${storedToken}`
-        
-        // Don't validate token on initial load to avoid unnecessary API calls
-        // Token will be validated when needed
+
+        // Check if token is expired
+        if (tokenExpiry.value && isTokenExpiring(tokenExpiry.value, 0)) {
+          console.log('Token expired on initialization, attempting refresh...')
+          if (storedRefresh) {
+            refreshAccessToken()
+          } else {
+            clearAuth()
+            return
+          }
+        } else {
+          isAuthenticated.value = true
+          
+          // Also ensure userRole is in localStorage for components that need it
+          if (user.value?.role) {
+            localStorage.setItem('userRole', user.value.role)
+          }
+          
+          // Set axios default header for both axios and apiClient
+          axios.defaults.headers.common['Authorization'] = `Bearer ${storedToken}`
+          apiClient.defaults.headers.common['Authorization'] = `Bearer ${storedToken}`
+          
+          // Schedule token refresh if we have expiry info
+          if (tokenExpiry.value && refreshToken.value) {
+            scheduleTokenRefresh()
+          }
+        }
       } catch (error) {
         console.error('Failed to initialize auth from storage:', error)
         clearAuth()
@@ -77,17 +198,23 @@ export function useAuth() {
       })
 
       const { tokens, user: userData } = response.data
-      const { access_token, refresh_token } = tokens
+      const { access_token, refresh_token: refresh_tok, expires_in } = tokens
 
       // Store token and user info
       token.value = access_token
+      refreshToken.value = refresh_tok
       user.value = userData
       isAuthenticated.value = true
+
+      // Calculate and store expiry
+      const expiry = Date.now() / 1000 + (expires_in || 1800) // Default 30 min if not provided
+      tokenExpiry.value = expiry
 
       // Persist to storage
       const storage = rememberMe ? localStorage : sessionStorage
       storage.setItem('auth_token', access_token)
-      storage.setItem('refresh_token', refresh_token)
+      storage.setItem('refresh_token', refresh_tok)
+      storage.setItem('token_expiry', expiry.toString())
       localStorage.setItem('user_info', JSON.stringify(userData))
       
       // Also store userRole separately for components that need it
@@ -98,6 +225,9 @@ export function useAuth() {
       // Set up axios defaults for both axios and apiClient
       axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`
       apiClient.defaults.headers.common['Authorization'] = `Bearer ${access_token}`
+
+      // Schedule automatic token refresh
+      scheduleTokenRefresh()
 
       return { success: true }
 
@@ -157,14 +287,26 @@ export function useAuth() {
   // Clear authentication state
   const clearAuth = () => {
     token.value = null
+    refreshToken.value = null
+    tokenExpiry.value = null
     user.value = null
     isAuthenticated.value = false
     
+    // Clear refresh timer
+    if (refreshTimer) {
+      clearTimeout(refreshTimer)
+      refreshTimer = null
+    }
+    
     // Clear storage
     localStorage.removeItem('auth_token')
+    localStorage.removeItem('refresh_token')
+    localStorage.removeItem('token_expiry')
     localStorage.removeItem('user_info')
     localStorage.removeItem('userRole')
     sessionStorage.removeItem('auth_token')
+    sessionStorage.removeItem('refresh_token')
+    sessionStorage.removeItem('token_expiry')
     
     // Clear axios default header for both axios and apiClient
     delete axios.defaults.headers.common['Authorization']
@@ -301,16 +443,29 @@ export function useAuth() {
       (error) => Promise.reject(error)
     )
 
-    // Response interceptor to handle 401 errors
+    // Response interceptor to handle 401 errors with automatic retry
     axios.interceptors.response.use(
       (response) => response,
-      (error) => {
-        if (error.response?.status === 401 && isAuthenticated.value) {
-          console.log('Token expired or invalid, logging out')
-          clearAuth()
-          // Redirect to login if not already there
-          if (window.location.pathname !== '/login') {
-            window.location.href = '/login'
+      async (error) => {
+        const originalRequest = error.config
+        
+        if (error.response?.status === 401 && isAuthenticated.value && !originalRequest._retry) {
+          console.log('Token expired, attempting to refresh...')
+          originalRequest._retry = true
+          
+          // Try to refresh the token
+          const refreshed = await refreshAccessToken()
+          
+          if (refreshed) {
+            // Retry the original request with new token
+            originalRequest.headers.Authorization = `Bearer ${token.value}`
+            return axios(originalRequest)
+          } else {
+            // Refresh failed, clear auth and redirect
+            clearAuth()
+            if (window.location.pathname !== '/login') {
+              window.location.href = '/login'
+            }
           }
         }
         return Promise.reject(error)
