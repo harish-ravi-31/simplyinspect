@@ -11,9 +11,9 @@ set -e
 # ========================================
 
 # Azure Configuration
-RESOURCE_GROUP="rg-simplyinspect2"
+RESOURCE_GROUP="rg-simplyinspect3"
 LOCATION="northeurope"
-PREFIX="simplyinspect2"
+PREFIX="simplyinspect3"
 
 # Container Registry (UPDATE THESE WITH YOUR ACR DETAILS)
 ACR_NAME="${PREFIX}acr"  # ACR names cannot contain hyphens
@@ -46,10 +46,14 @@ else
     JWT_SECRET_KEY="your-secret-key-here-change-in-production-default123456789"
 fi
 
-# Azure AD Configuration (UPDATE WITH YOUR VALUES)
-AZURE_TENANT_ID=""
-AZURE_CLIENT_ID=""
-AZURE_CLIENT_SECRET=""
+# Azure AD Configuration (read from environment)
+# Require the following environment variables to be set before running:
+#  - AZURE_TENANT_ID
+#  - AZURE_CLIENT_ID
+#  - AZURE_CLIENT_SECRET
+: "${AZURE_TENANT_ID:?Environment variable AZURE_TENANT_ID is required}"
+: "${AZURE_CLIENT_ID:?Environment variable AZURE_CLIENT_ID is required}"
+: "${AZURE_CLIENT_SECRET:?Environment variable AZURE_CLIENT_SECRET is required}"
 SHAREPOINT_URL="https://simplydiscoverco.sharepoint.com"
 
 # SMTP Configuration
