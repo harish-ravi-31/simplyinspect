@@ -140,7 +140,7 @@ CREATE INDEX IF NOT EXISTS idx_role_permissions_permission ON public.role_permis
 -- INITIAL DATA
 -- =====================================================
 
--- Create default administrator user (password: AdminPassword123!)
+-- Create default administrator user (password: Admin123!)
 INSERT INTO public.users (
     email, 
     username, 
@@ -156,7 +156,7 @@ INSERT INTO public.users (
 SELECT 
     'admin@simplyinspect.com',
     'admin',
-    '$2b$12$5vHZQS0JjjJGYqoGm8tK6eH7Q8q7KPEoXj9WfV8LHZ5z.2K6sPpIG',
+    '$2b$12$Myqe6R9HUbuAVsad5vFhEu/ZhvbBb/7qqFdQjiiT8Zm11eypkiCVK', -- Admin123!
     'System Administrator',
     'administrator',
     true,

@@ -16,10 +16,46 @@ class DatabaseHandler:
         self.db_config = {
             'host': os.environ.get('DB_HOST', 'localhost'),
             'port': int(os.environ.get('DB_PORT', 5432)),
-            'database': os.environ.get('DB_NAME', 'simplyarchive'),
+            'database': os.environ.get('DB_NAME', 'simplyinspect'),
             'user': os.environ.get('DB_USER', 'postgres'),
-            'password': os.environ.get('DB_PASSWORD', '')
+            'password': self._get_db_password(),
+            'ssl': os.environ.get('PGSSLMODE', 'prefer')  # Support SSL for Azure PostgreSQL
         }
+    
+    def _get_db_password(self) -> str:
+        """Get database password from Azure Key Vault or environment variable"""
+        # First try to get from Azure Key Vault if configured
+        key_vault_uri = os.getenv("KEY_VAULT_URI")
+        key_vault_name = os.getenv("KEY_VAULT_NAME")
+        
+        if key_vault_uri and key_vault_name:
+            try:
+                from azure.keyvault.secrets import SecretClient
+                
+                # Try managed identity first (for Azure), then DefaultAzureCredential (for local dev)
+                try:
+                    from azure.identity import ManagedIdentityCredential
+                    logger.info(f"Using ManagedIdentityCredential for Key Vault: {key_vault_name}")
+                    credential = ManagedIdentityCredential()
+                except Exception:
+                    from azure.identity import DefaultAzureCredential
+                    logger.info(f"Using DefaultAzureCredential for Key Vault: {key_vault_name}")
+                    credential = DefaultAzureCredential()
+                
+                client = SecretClient(vault_url=key_vault_uri, credential=credential)
+                
+                secret = client.get_secret("db-password")
+                logger.info("Successfully retrieved DB password from Azure Key Vault")
+                return secret.value
+            except Exception as e:
+                logger.warning(f"Could not retrieve DB password from Key Vault: {e}")
+        
+        # Fall back to environment variable (no default value for security)
+        password = os.environ.get('DB_PASSWORD')
+        if not password:
+            logger.error("DB_PASSWORD not found in environment variables or Key Vault")
+            raise ValueError("Database password not configured")
+        return password
         
     async def connect(self):
         """Create database connection pool"""
@@ -31,6 +67,7 @@ class DatabaseHandler:
                     database=self.db_config['database'],
                     user=self.db_config['user'],
                     password=self.db_config['password'],
+                    ssl=self.db_config['ssl'],  # Add SSL support
                     min_size=2,
                     max_size=10,
                     command_timeout=60.0

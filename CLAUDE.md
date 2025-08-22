@@ -173,7 +173,7 @@ The application can be deployed to Azure Container Instances using the provided 
 
 **Default Admin Credentials** (created automatically):
 - **Email**: admin@simplyinspect.com
-- **Password**: AdminPassword123!
+- **Password**: Admin123!
 
 **Important**: Change default credentials in production!
 

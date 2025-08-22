@@ -15,11 +15,10 @@ logger = logging.getLogger(__name__)
 
 class AuthService:
     def __init__(self):
-        # JWT Configuration
-        jwt_secret = os.getenv("JWT_SECRET_KEY")
-        if jwt_secret:
-            self.secret_key = jwt_secret
-            logger.info(f"Using configured JWT secret key (length: {len(jwt_secret)})")
+        # JWT Configuration - Try Key Vault first, then env var, then generate
+        self.secret_key = self._get_jwt_secret()
+        if self.secret_key:
+            logger.info(f"Using JWT secret key (length: {len(self.secret_key)})")
         else:
             self.secret_key = self._generate_secret_key()
             
@@ -34,6 +33,42 @@ class AuthService:
         self.ACCESS_TOKEN = "access"
         self.REFRESH_TOKEN = "refresh"
         
+    def _get_jwt_secret(self) -> Optional[str]:
+        """Get JWT secret from Azure Key Vault or environment variable"""
+        # First try to get from Azure Key Vault if configured
+        key_vault_uri = os.getenv("KEY_VAULT_URI")
+        key_vault_name = os.getenv("KEY_VAULT_NAME")
+        
+        if key_vault_uri and key_vault_name:
+            try:
+                from azure.keyvault.secrets import SecretClient
+                
+                # Try managed identity first (for Azure), then DefaultAzureCredential (for local dev)
+                try:
+                    from azure.identity import ManagedIdentityCredential
+                    logger.info(f"Using ManagedIdentityCredential for Key Vault: {key_vault_name}")
+                    credential = ManagedIdentityCredential()
+                except Exception:
+                    from azure.identity import DefaultAzureCredential
+                    logger.info(f"Using DefaultAzureCredential for Key Vault: {key_vault_name}")
+                    credential = DefaultAzureCredential()
+                
+                client = SecretClient(vault_url=key_vault_uri, credential=credential)
+                
+                secret = client.get_secret("jwt-secret-key")
+                logger.info("Successfully retrieved JWT secret from Azure Key Vault")
+                return secret.value
+            except Exception as e:
+                logger.warning(f"Could not retrieve JWT secret from Key Vault: {e}")
+        
+        # Fall back to environment variable
+        jwt_secret = os.getenv("JWT_SECRET_KEY")
+        if jwt_secret:
+            logger.info("Using JWT secret from environment variable")
+            return jwt_secret
+        
+        return None
+    
     def _generate_secret_key(self) -> str:
         """Generate a secure random secret key if none is provided"""
         key = secrets.token_urlsafe(32)

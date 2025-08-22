@@ -11,13 +11,19 @@ set -e
 # ========================================
 
 # Azure Configuration
-RESOURCE_GROUP="rg-simplyinspect2"
+RESOURCE_GROUP="rg-simplyinspect4"
 LOCATION="northeurope"
-PREFIX="simplyinspect2"
+PREFIX="simplyinspect4"
+
+# Key Vault Configuration
+KEY_VAULT_NAME="${PREFIX}-kv"
+KEY_VAULT_SKU="standard"
 
 # Container Registry (UPDATE THESE WITH YOUR ACR DETAILS)
-ACR_NAME="${PREFIX}acr"  # ACR names cannot contain hyphens
+ACR_NAME="sdacr2"  # ACR names cannot contain hyphens
 ACR_SERVER="${ACR_NAME}.azurecr.io"
+ACR_USERNAME="sdacr2"  # ACR username (typically same as ACR name)
+# ACR_PASSWORD must be provided as environment variable before running the script
 
 # Container Images (UPDATE WITH YOUR IMAGE TAGS)
 API_IMAGE="${ACR_SERVER}/simplyinspect-api:latest"
@@ -36,20 +42,16 @@ DB_HOST="${DB_SERVER_NAME}.postgres.database.azure.com"
 DB_PORT="5432"
 DB_NAME="simplyinspect"
 DB_USER="postgres"
-DB_PASSWORD="SimplyInspect2024"  # Change this to a secure password
+# DB_PASSWORD will be generated and stored in Key Vault
 
 # Application Configuration
-if command -v openssl &>/dev/null; then
-    JWT_SECRET_KEY="your-secret-key-here-change-in-production-$(openssl rand -hex 32)"
-else
-    echo "Warning: openssl not found, using default JWT secret (INSECURE)"
-    JWT_SECRET_KEY="your-secret-key-here-change-in-production-default123456789"
-fi
+# JWT_SECRET_KEY will be generated and stored in Key Vault
 
-# Azure AD Configuration (UPDATE WITH YOUR VALUES)
-AZURE_TENANT_ID=""
-AZURE_CLIENT_ID=""
-AZURE_CLIENT_SECRET=""
+# Azure AD Configuration (MUST BE SET AS ENVIRONMENT VARIABLES)
+# These values must be provided as environment variables before running this script:
+# - AZURE_TENANT_ID
+# - AZURE_CLIENT_ID  
+# - AZURE_CLIENT_SECRET
 SHAREPOINT_URL="https://simplydiscoverco.sharepoint.com"
 
 # SMTP Configuration
@@ -98,9 +100,22 @@ validate_environment_variables() {
     local missing_vars=()
     local warnings=()
     
-    # Check for placeholder values that need to be updated
-    if [[ -z "$AZURE_CLIENT_SECRET" ]] || [[ "$AZURE_CLIENT_SECRET" == "your-client-secret-here" ]]; then
-        missing_vars+=("AZURE_CLIENT_SECRET")
+    # Check required Azure AD environment variables
+    if [[ -z "$AZURE_TENANT_ID" ]]; then
+        missing_vars+=("AZURE_TENANT_ID (environment variable)")
+    fi
+    
+    if [[ -z "$AZURE_CLIENT_ID" ]]; then
+        missing_vars+=("AZURE_CLIENT_ID (environment variable)")
+    fi
+    
+    if [[ -z "$AZURE_CLIENT_SECRET" ]]; then
+        missing_vars+=("AZURE_CLIENT_SECRET (environment variable)")
+    fi
+    
+    # Check required ACR password
+    if [[ -z "$ACR_PASSWORD" ]]; then
+        missing_vars+=("ACR_PASSWORD (environment variable)")
     fi
     
     if [[ "$SHAREPOINT_URL" == "https://your-tenant.sharepoint.com" ]]; then
@@ -109,10 +124,6 @@ validate_environment_variables() {
     
     if [[ "$SMTP_PASSWORD" == "your-smtp-password" ]]; then
         warnings+=("SMTP_PASSWORD not configured - email notifications will not work")
-    fi
-    
-    if [[ "$DB_PASSWORD" == "SimplyInspect2024" ]]; then
-        warnings+=("Using default database password - change for production security")
     fi
     
     # Validate PostgreSQL version compatibility
@@ -131,7 +142,17 @@ validate_environment_variables() {
         echo "❌ Missing required configuration:"
         printf " - %s\n" "${missing_vars[@]}"
         echo ""
-        echo "Please update the deployment script with your actual values."
+        echo "Please set the following environment variables before running:"
+        echo ""
+        echo "# Azure AD credentials:"
+        echo "  export AZURE_TENANT_ID='your-tenant-id'"
+        echo "  export AZURE_CLIENT_ID='your-client-id'"
+        echo "  export AZURE_CLIENT_SECRET='your-client-secret'"
+        echo ""
+        echo "# ACR password:"
+        echo "  export ACR_PASSWORD='your-acr-password'"
+        echo ""
+        echo "For other values, update the deployment script."
         return 1
     fi
     
@@ -172,47 +193,129 @@ else
     echo "Resource group already exists: $RESOURCE_GROUP"
 fi
 
-# 2. Setup ACR credentials
-print_status "Step 2: Container Registry Setup"
-if [ "$ACR_NAME" != "YOUR_ACR_NAME" ]; then
-    # Check if ACR exists
-    if az acr show --name "$ACR_NAME" &>/dev/null; then
-        echo "Enabling admin user on ACR: $ACR_NAME"
-        az acr update --name "$ACR_NAME" --admin-enabled true
-        
-        echo "Fetching ACR credentials"
-        ACR_USERNAME=$(az acr credential show --name "$ACR_NAME" --query username --output tsv)
-        ACR_PASSWORD=$(az acr credential show --name "$ACR_NAME" --query "passwords[0].value" --output tsv)
-        echo "ACR credentials fetched successfully"
-        
-        # Validate that images exist in ACR
-        echo "Checking if container images exist in ACR..."
-        API_IMAGE_EXISTS=$(az acr repository show --name "$ACR_NAME" --image "simplyinspect-api:latest" &>/dev/null && echo "yes" || echo "no")
-        UI_IMAGE_EXISTS=$(az acr repository show --name "$ACR_NAME" --image "simplyinspect-ui:latest" &>/dev/null && echo "yes" || echo "no")
-        
-        if [ "$API_IMAGE_EXISTS" == "no" ] || [ "$UI_IMAGE_EXISTS" == "no" ]; then
-            echo "Error: Container images not found in ACR"
-            [ "$API_IMAGE_EXISTS" == "no" ] && echo "  Missing: simplyinspect-api:latest"
-            [ "$UI_IMAGE_EXISTS" == "no" ] && echo "  Missing: simplyinspect-ui:latest"
-            echo ""
-            echo "Please build and push images first:"
-            echo "  az acr build --registry $ACR_NAME --image simplyinspect-api:latest -f Dockerfile.api ."
-            echo "  az acr build --registry $ACR_NAME --image simplyinspect-ui:latest -f Dockerfile.ui ."
-            exit 1
-        fi
-        echo "Container images validated successfully"
-    else
-        echo "Error: ACR '$ACR_NAME' does not exist. Please create it first."
-        echo "Run: az acr create --resource-group $RESOURCE_GROUP --name $ACR_NAME --sku Basic"
-        exit 1
-    fi
+# 2. Create and Configure Azure Key Vault
+print_status "Step 2: Azure Key Vault Setup"
+
+# Check if Key Vault exists
+if ! check_resource_exists "keyvault" "$KEY_VAULT_NAME" "$RESOURCE_GROUP"; then
+    echo "Creating Key Vault: $KEY_VAULT_NAME"
+    az keyvault create \
+        --resource-group "$RESOURCE_GROUP" \
+        --name "$KEY_VAULT_NAME" \
+        --location "$LOCATION" \
+        --sku "$KEY_VAULT_SKU" \
+        --enable-rbac-authorization false \
+        --enabled-for-deployment true \
+        --enabled-for-template-deployment true
 else
-    echo "Warning: ACR_NAME not configured. Please update the script with your ACR name."
+    echo "Key Vault already exists: $KEY_VAULT_NAME"
+fi
+
+# Generate and store JWT secret (only if not exists)
+echo "Checking JWT secret in Key Vault..."
+JWT_EXISTS=$(az keyvault secret show --vault-name "$KEY_VAULT_NAME" --name "jwt-secret-key" &>/dev/null && echo "yes" || echo "no")
+
+if [ "$JWT_EXISTS" == "no" ]; then
+    echo "Generating new JWT secret key..."
+    if command -v openssl &>/dev/null; then
+        JWT_SECRET_KEY=$(openssl rand -hex 64)
+    else
+        # Fallback to urandom if openssl not available
+        JWT_SECRET_KEY=$(head -c 64 /dev/urandom | base64 | tr -d '\n')
+    fi
+    
+    echo "Storing JWT secret in Key Vault..."
+    az keyvault secret set \
+        --vault-name "$KEY_VAULT_NAME" \
+        --name "jwt-secret-key" \
+        --value "$JWT_SECRET_KEY" \
+        --description "JWT secret key for SimplyInspect API authentication"
+else
+    echo "JWT secret already exists in Key Vault"
+    JWT_SECRET_KEY=$(az keyvault secret show --vault-name "$KEY_VAULT_NAME" --name "jwt-secret-key" --query value -o tsv)
+fi
+
+# Generate and store database password (only if not exists)
+echo "Checking database password in Key Vault..."
+DB_PASSWORD_EXISTS=$(az keyvault secret show --vault-name "$KEY_VAULT_NAME" --name "db-password" &>/dev/null && echo "yes" || echo "no")
+
+if [ "$DB_PASSWORD_EXISTS" == "no" ]; then
+    echo "Generating new database password..."
+    if command -v openssl &>/dev/null; then
+        DB_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
+    else
+        # Fallback to urandom if openssl not available
+        DB_PASSWORD=$(head -c 32 /dev/urandom | base64 | tr -d "=+/" | cut -c1-25)
+    fi
+    
+    # Add special characters to meet complexity requirements
+    DB_PASSWORD="${DB_PASSWORD}@Az1"
+    
+    echo "Storing database password in Key Vault..."
+    az keyvault secret set \
+        --vault-name "$KEY_VAULT_NAME" \
+        --name "db-password" \
+        --value "$DB_PASSWORD" \
+        --description "PostgreSQL database password for SimplyInspect" \
+        --tags "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+else
+    echo "Database password already exists in Key Vault"
+    DB_PASSWORD=$(az keyvault secret show --vault-name "$KEY_VAULT_NAME" --name "db-password" --query value -o tsv)
+fi
+
+# Get the Key Vault URI for later use
+KEY_VAULT_URI=$(az keyvault show --name "$KEY_VAULT_NAME" --query "properties.vaultUri" -o tsv)
+echo "Key Vault URI: $KEY_VAULT_URI"
+
+# 3. Setup ACR credentials
+print_status "Step 3: Container Registry Setup"
+
+# Display ACR configuration
+echo "Using ACR: $ACR_NAME"
+echo "ACR Server: $ACR_SERVER"
+echo "ACR Username: $ACR_USERNAME"
+
+# Test ACR login with provided credentials
+echo "Testing ACR login with provided credentials..."
+if az acr login --name "$ACR_NAME" --username "$ACR_USERNAME" --password "$ACR_PASSWORD" &>/dev/null; then
+    echo "✅ Successfully authenticated to ACR"
+else
+    echo "❌ Failed to authenticate to ACR with provided credentials"
+    echo "Please verify your ACR_USERNAME and ACR_PASSWORD environment variables"
     exit 1
 fi
 
-# 3. Create Virtual Network with Subnet for Container Instances
-print_status "Step 3: Virtual Network and Subnet"
+# Validate that images exist in ACR
+echo "Checking if container images exist in ACR..."
+API_IMAGE_EXISTS=$(az acr repository show --name "$ACR_NAME" --image "simplyinspect-api:latest" &>/dev/null && echo "yes" || echo "no")
+UI_IMAGE_EXISTS=$(az acr repository show --name "$ACR_NAME" --image "simplyinspect-ui:latest" &>/dev/null && echo "yes" || echo "no")
+
+if [ "$API_IMAGE_EXISTS" == "no" ] || [ "$UI_IMAGE_EXISTS" == "no" ]; then
+    echo "⚠️ Container images not found in ACR"
+    [ "$API_IMAGE_EXISTS" == "no" ] && echo "  Missing: simplyinspect-api:latest"
+    [ "$UI_IMAGE_EXISTS" == "no" ] && echo "  Missing: simplyinspect-ui:latest"
+    echo ""
+    echo "Building and pushing images to ACR..."
+    
+    # Build and push API image
+    if [ "$API_IMAGE_EXISTS" == "no" ]; then
+        echo "Building API image..."
+        az acr build --registry "$ACR_NAME" --image simplyinspect-api:latest -f Dockerfile.api . || exit 1
+    fi
+    
+    # Build and push UI image
+    if [ "$UI_IMAGE_EXISTS" == "no" ]; then
+        echo "Building UI image..."
+        az acr build --registry "$ACR_NAME" --image simplyinspect-ui:latest -f Dockerfile.ui . || exit 1
+    fi
+    
+    echo "✅ Container images built and pushed successfully"
+else
+    echo "✅ Container images validated successfully"
+fi
+
+# 4. Create Virtual Network with Subnet for Container Instances
+print_status "Step 4: Virtual Network and Subnet"
 if ! check_resource_exists "network vnet" "$VNET_NAME" "$RESOURCE_GROUP"; then
     echo "Creating virtual network: $VNET_NAME"
     az network vnet create \
@@ -246,8 +349,8 @@ SUBNET_ID=$(az network vnet subnet show \
     --query id --output tsv)
 echo "Subnet ID: $SUBNET_ID"
 
-# 4. Create Network Security Group
-print_status "Step 4: Network Security Group"
+# 5. Create Network Security Group
+print_status "Step 5: Network Security Group"
 if ! check_resource_exists "network nsg" "$NSG_NAME" "$RESOURCE_GROUP"; then
     echo "Creating network security group: $NSG_NAME"
     az network nsg create \
@@ -292,8 +395,8 @@ az network vnet subnet update \
     --resource-group "$RESOURCE_GROUP" \
     --network-security-group "$NSG_NAME" || true
 
-# 5. Create Public IP
-print_status "Step 5: Public IP Address"
+# 6. Create Public IP
+print_status "Step 6: Public IP Address"
 if ! check_resource_exists "network public-ip" "$PUBLIC_IP_NAME" "$RESOURCE_GROUP"; then
     echo "Creating public IP: $PUBLIC_IP_NAME"
     az network public-ip create \
@@ -318,8 +421,8 @@ PUBLIC_IP_ID=$(az network public-ip show \
 echo "Public IP address: $PUBLIC_IP"
 echo "DNS name: ${DNS_NAME_LABEL}.${LOCATION}.cloudapp.azure.com"
 
-# 6. Create Load Balancer
-print_status "Step 6: Load Balancer"
+# 7. Create Load Balancer
+print_status "Step 7: Load Balancer"
 LB_NAME="${PREFIX}-lb"
 FRONTEND_IP_NAME="${PREFIX}-frontend"
 BACKEND_POOL_NAME="${PREFIX}-lbbepool"  # Default name when using --backend-pool-name in az lb create
@@ -373,8 +476,13 @@ else
     echo "Load balancing rule already exists: $LB_RULE_NAME"
 fi
 
-# 7. Create PostgreSQL Flexible Server
-print_status "Step 7: PostgreSQL Database"
+# 8. Create PostgreSQL Flexible Server
+print_status "Step 8: PostgreSQL Database"
+
+# Get the database password from Key Vault for PostgreSQL creation
+echo "Retrieving database password from Key Vault..."
+DB_PASSWORD=$(az keyvault secret show --vault-name "$KEY_VAULT_NAME" --name "db-password" --query value -o tsv)
+
 if ! check_resource_exists "postgres flexible-server" "$DB_SERVER_NAME" "$RESOURCE_GROUP"; then
     echo "Creating PostgreSQL server: $DB_SERVER_NAME"
     az postgres flexible-server create \
@@ -408,8 +516,8 @@ else
     echo "PostgreSQL server already exists: $DB_SERVER_NAME"
 fi
 
-# 8. Create Private DNS Zone for internal communication
-print_status "Step 8: Private DNS Zone"
+# 9. Create Private DNS Zone for internal communication
+print_status "Step 9: Private DNS Zone"
 DNS_ZONE_NAME="internal.lan"
 VNET_ID=$(az network vnet show \
     --name "$VNET_NAME" \
@@ -433,8 +541,8 @@ else
     echo "Private DNS zone already exists: $DNS_ZONE_NAME"
 fi
 
-# 9. Generate ACI deployment YAML
-print_status "Step 9: Generating Container Instance Configuration"
+# 10. Generate ACI deployment YAML
+print_status "Step 10: Generating Container Instance Configuration"
 
 ACI_YAML_FILE="/tmp/simplyinspect-aci-deploy.yaml"
 
@@ -442,6 +550,8 @@ cat > "$ACI_YAML_FILE" << EOF
 apiVersion: '2021-07-01'
 name: ${CONTAINER_GROUP_NAME}
 location: ${LOCATION}
+identity:
+  type: SystemAssigned
 properties:
   containers:
     - name: simplyinspect-api
@@ -462,6 +572,10 @@ properties:
             value: "require"
           - name: JWT_SECRET_KEY
             secureValue: "${JWT_SECRET_KEY}"
+          - name: KEY_VAULT_URI
+            value: "${KEY_VAULT_URI}"
+          - name: KEY_VAULT_NAME
+            value: "${KEY_VAULT_NAME}"
           - name: AZURE_TENANT_ID
             value: "${AZURE_TENANT_ID}"
           - name: AZURE_CLIENT_ID
@@ -537,8 +651,8 @@ EOF
 
 echo "ACI configuration generated at: $ACI_YAML_FILE"
 
-# 10. Deploy Container Instances
-print_status "Step 10: Deploying Container Instances"
+# 11. Deploy Container Instances
+print_status "Step 11: Deploying Container Instances"
 
 # Check if container group exists
 if check_resource_exists "container" "$CONTAINER_GROUP_NAME" "$RESOURCE_GROUP"; then
@@ -557,6 +671,31 @@ echo "Creating container group: $CONTAINER_GROUP_NAME"
 az container create \
     --resource-group "$RESOURCE_GROUP" \
     --file "$ACI_YAML_FILE"
+
+# Grant the container's managed identity access to Key Vault
+echo "Granting container managed identity access to Key Vault..."
+# Get the principal ID of the container's managed identity
+CONTAINER_IDENTITY=$(az container show \
+    --resource-group "$RESOURCE_GROUP" \
+    --name "$CONTAINER_GROUP_NAME" \
+    --query "identity.principalId" \
+    --output tsv 2>/dev/null || echo "")
+
+if [ -n "$CONTAINER_IDENTITY" ]; then
+    echo "Container identity: $CONTAINER_IDENTITY"
+    
+    # Grant access to Key Vault secrets
+    echo "Setting Key Vault access policy for container identity..."
+    az keyvault set-policy \
+        --name "$KEY_VAULT_NAME" \
+        --object-id "$CONTAINER_IDENTITY" \
+        --secret-permissions get list \
+        --key-permissions get list \
+        --certificate-permissions get list \
+        2>/dev/null || echo "Access policy may already exist"
+else
+    echo "Warning: Could not get container managed identity"
+fi
 
 # Wait for containers to be ready with polling
 echo "Waiting for containers to start..."
@@ -593,8 +732,8 @@ if [ $ELAPSED -ge $MAX_WAIT ]; then
     echo "Current state: $CONTAINER_STATE"
 fi
 
-# 11. Add Container Group to Load Balancer Backend Pool
-print_status "Step 11: Configuring Load Balancer Backend"
+# 12. Add Container Group to Load Balancer Backend Pool
+print_status "Step 12: Configuring Load Balancer Backend"
 
 # Container IP was already fetched in the polling loop above
 
@@ -636,8 +775,8 @@ else
     echo "Warning: Could not get container IP address"
 fi
 
-# 12. Validate Deployment and Create Admin User
-print_status "Step 12: Deployment Validation"
+# 13. Validate Deployment and Create Admin User
+print_status "Step 13: Deployment Validation"
 
 # Wait for API container to be fully ready
 echo "Waiting for API container to be fully ready..."
@@ -673,70 +812,23 @@ MIGRATION_CHECK=$(az container logs --resource-group "$RESOURCE_GROUP" --name "$
 if echo "$MIGRATION_CHECK" | grep -q "Database initialization complete"; then
     echo "✅ Database migrations completed successfully"
     
-    # Create/Update admin user with proper password hash
-    echo "Creating admin user with proper password hash..."
-    ADMIN_CREATION_RESULT=$(az container exec --resource-group "$RESOURCE_GROUP" --name "$CONTAINER_GROUP_NAME" --container-name simplyinspect-api --exec-command "python -c \"
-import asyncio
-import asyncpg
-import sys
-sys.path.append('/app')
-from src.services.auth_service import AuthService
-
-async def create_admin():
-    try:
-        conn = await asyncpg.connect(
-            host='$DB_HOST',
-            port=$DB_PORT,
-            user='$DB_USER', 
-            password='$DB_PASSWORD',
-            database='$DB_NAME',
-            ssl='require'
-        )
+    # Admin user is created by migrations, just test the login
+    echo "Testing admin login..."
+    sleep 5  # Give the system a moment after migrations
+    
+    LOGIN_TEST=$(curl -s -X POST "http://${PUBLIC_IP}/api/v1/auth/login" \
+        -H "Content-Type: application/json" \
+        -d '{"email":"admin@simplyinspect.com","password":"Admin123!"}' \
+        -w "%{http_code}" \
+        --connect-timeout 10 2>/dev/null || echo "000")
         
-        auth = AuthService()
-        hash_val = auth.hash_password('AdminPassword123!')
-        
-        # Use UPSERT to create or update admin user
-        await conn.execute('''
-            INSERT INTO users (email, username, password_hash, full_name, role, is_approved, is_active, company, created_at, updated_at)
-            VALUES (\\\$1, \\\$2, \\\$3, \\\$4, \\\$5, \\\$6, \\\$7, \\\$8, NOW(), NOW())
-            ON CONFLICT (email) DO UPDATE SET 
-                password_hash = \\\$3,
-                updated_at = NOW()
-        ''', 'admin@simplyinspect.com', 'admin', hash_val, 'System Administrator', 'administrator', True, True, 'SimplyInspect')
-        
-        print('SUCCESS: Admin user created/updated')
-        await conn.close()
-        
-    except Exception as e:
-        print(f'ERROR: {e}')
-        sys.exit(1)
-
-asyncio.run(create_admin())
-\"" 2>&1)
-
-    if echo "$ADMIN_CREATION_RESULT" | grep -q "SUCCESS"; then
-        echo "✅ Admin user created/updated successfully"
-        
-        # Test admin login
-        echo "Testing admin login..."
-        sleep 10  # Give the system a moment after user creation
-        
-        LOGIN_TEST=$(curl -s -X POST "http://${PUBLIC_IP}/api/v1/auth/login" \
-            -H "Content-Type: application/json" \
-            -d '{"email":"admin@simplyinspect.com","password":"AdminPassword123!"}' \
-            -w "%{http_code}" \
-            --connect-timeout 10 2>/dev/null || echo "000")
-            
-        if echo "$LOGIN_TEST" | grep -q "200"; then
-            echo "✅ Admin login test successful"
-        else
-            echo "⚠️  Admin login test failed (HTTP: ${LOGIN_TEST##*$'\n'})"
-            echo "Manual verification may be needed"
-        fi
+    if echo "$LOGIN_TEST" | grep -q "200"; then
+        echo "✅ Admin login test successful"
     else
-        echo "⚠️  Admin user creation had issues:"
-        echo "$ADMIN_CREATION_RESULT"
+        echo "⚠️  Admin login test failed (HTTP: ${LOGIN_TEST##*$'\n'})"
+        echo "Manual verification may be needed"
+        echo "Check the API logs for details:"
+        echo "  az container logs --resource-group $RESOURCE_GROUP --name $CONTAINER_GROUP_NAME --container-name simplyinspect-api"
     fi
     
 elif echo "$MIGRATION_CHECK" | grep -q "Failed"; then
@@ -748,7 +840,7 @@ else
     echo "⚠️  Could not verify migration status - check container logs manually"
 fi
 
-# 13. Display deployment information
+# 14. Display deployment information
 print_status "Deployment Complete!"
 
 echo "🎉 SimplyInspect has been successfully deployed to Azure!"
@@ -759,7 +851,7 @@ echo "  Load Balancer IP: http://${PUBLIC_IP}"
 echo ""
 echo "🔐 Admin Login Credentials:"
 echo "  Email: admin@simplyinspect.com"
-echo "  Password: AdminPassword123!"
+echo "  Password: Admin123!"
 echo ""
 echo "🔧 Internal Services (within VNet):"
 echo "  API: http://simplyinspect-api.internal.lan:8000"
@@ -781,18 +873,6 @@ echo ""
 echo "To check load balancer health:"
 echo "  az network lb probe show --resource-group $RESOURCE_GROUP --lb-name $LB_NAME --name $HEALTH_PROBE_NAME"
 echo ""
-echo "IMPORTANT: Remember to:"
-echo "1. Update the ACR credentials in this script with your actual values"
-echo "2. Push your Docker images to ACR:"
-echo "   az acr build --registry $ACR_NAME --image simplyinspect-api:latest -f Dockerfile.api ."
-echo "   az acr build --registry $ACR_NAME --image simplyinspect-ui:latest -f Dockerfile.ui ."
-echo "3. Update Azure AD credentials for SharePoint integration"
-echo "4. Configure SMTP settings for email notifications"
-echo "5. Run database migrations after deployment"
-echo ""
-echo "Note: Containers within the same group communicate via localhost:"
-echo "  - UI can reach API at: http://localhost:8000"
-echo "  - This is configured in the container environment variables"
 
 # Clean up temporary file
 rm -f "$ACI_YAML_FILE"

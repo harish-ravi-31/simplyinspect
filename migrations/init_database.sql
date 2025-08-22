@@ -625,7 +625,7 @@ INSERT INTO public.users (
 ) 
 SELECT 
     'admin@simplyinspect.com', 'admin',
-    '$2b$12$K6HXYqVVjNZH4dQXsNnYVuGXjLV5GYKxGZEGJYnXGZQKxVXJZ5j7i', -- Admin123!
+    '$2b$12$Myqe6R9HUbuAVsad5vFhEu/ZhvbBb/7qqFdQjiiT8Zm11eypkiCVK', -- Admin123!
     'System Administrator', 'administrator', TRUE, TRUE, 'SimplyInspect'
 WHERE NOT EXISTS (
     SELECT 1 FROM public.users WHERE role = 'administrator' AND is_active = TRUE

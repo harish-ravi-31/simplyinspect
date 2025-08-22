@@ -161,7 +161,7 @@ INSERT INTO public.role_permissions (role, resource, action) VALUES
 ON CONFLICT (role, resource, action) DO NOTHING;
 
 -- =====================================================
--- DEFAULT ADMIN USER (password: AdminPassword123!)
+-- DEFAULT ADMIN USER (password: Admin123!)
 -- You should change this password immediately after first login
 -- =====================================================
 
@@ -175,9 +175,9 @@ INSERT INTO public.users (
     is_active,
     created_at
 ) VALUES (
-    'admin@simplyinspect.local',
+    'admin@simplyinspect.com',
     'admin',
-    '$2b$12$LQyrJpboXzCG0/c5etC5J.e2hkDO.n0A5m7rGCvCdcHdNEAJmtbTm', -- AdminPassword123!
+    '$2b$12$Myqe6R9HUbuAVsad5vFhEu/ZhvbBb/7qqFdQjiiT8Zm11eypkiCVK', -- Admin123!
     'System Administrator',
     'administrator',
     TRUE,

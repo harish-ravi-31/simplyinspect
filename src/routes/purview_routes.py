@@ -788,9 +788,10 @@ async def test_database_connection(
         conn = await asyncpg.connect(
             host=db_config.get('host', 'localhost'),
             port=db_config.get('port', 5432),
-            database=db_config.get('database', 'SD-08'),
+            database=db_config.get('database', 'simplyinspect'),
             user=db_config.get('username', 'postgres'),
-            password=db_config.get('password', '')
+            password=db_config.get('password', ''),
+            ssl=db_config.get('ssl', 'prefer')  # Add SSL support
         )
         
         # Test basic query

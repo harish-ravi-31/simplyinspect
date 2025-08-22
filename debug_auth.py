@@ -55,7 +55,7 @@ async def debug_auth():
     print(f"Hash type: {'bcrypt' if hash_value.startswith('$2') else 'unknown'}")
     
     # Test passwords
-    test_passwords = ["AdminPassword123!", "Admin123!", "simplyinspect", "password"]
+    test_passwords = ["Admin123!", "simplyinspect", "password"]
     print("\nVerifying test passwords:")
     for password in test_passwords:
         is_valid = pwd_context.verify(password, hash_value)
@@ -63,10 +63,10 @@ async def debug_auth():
     
     # Generate new hash and compare
     print("\nGenerating new hash for comparison:")
-    new_hash = pwd_context.hash("AdminPassword123!")
+    new_hash = pwd_context.hash("Admin123!")
     print(f"New hash: {new_hash}")
     print(f"Comparing new hash to stored hash: {'Same' if new_hash == hash_value else 'Different'}")
-    print(f"Cross-verification: {pwd_context.verify('AdminPassword123!', new_hash)}")
+    print(f"Cross-verification: {pwd_context.verify('Admin123!', new_hash)}")
     
     # Update password if needed
     update = input("\nWould you like to update the admin password? (yes/no): ").strip().lower()

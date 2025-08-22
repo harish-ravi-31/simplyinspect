@@ -18,9 +18,45 @@ class DatabaseInitializer:
         self.db_host = os.getenv('DB_HOST', 'postgres')
         self.db_port = int(os.getenv('DB_PORT', 5432))
         self.db_name = os.getenv('DB_NAME', 'simplyinspect')
-        self.db_user = os.getenv('DB_USER', 'simplyinspect')
-        self.db_password = os.getenv('DB_PASSWORD', 'SimplyInspect2024!')
+        self.db_user = os.getenv('DB_USER', 'postgres')
+        self.db_password = self._get_db_password()
+        self.db_ssl = os.getenv('PGSSLMODE', 'prefer')  # Support SSL for Azure PostgreSQL
         self.migrations_dir = Path(__file__).parent.parent.parent / 'migrations'
+    
+    def _get_db_password(self) -> str:
+        """Get database password from Azure Key Vault or environment variable"""
+        # First try to get from Azure Key Vault if configured
+        key_vault_uri = os.getenv("KEY_VAULT_URI")
+        key_vault_name = os.getenv("KEY_VAULT_NAME")
+        
+        if key_vault_uri and key_vault_name:
+            try:
+                from azure.keyvault.secrets import SecretClient
+                
+                # Try managed identity first (for Azure), then DefaultAzureCredential (for local dev)
+                try:
+                    from azure.identity import ManagedIdentityCredential
+                    logger.info(f"Using ManagedIdentityCredential for Key Vault: {key_vault_name}")
+                    credential = ManagedIdentityCredential()
+                except Exception:
+                    from azure.identity import DefaultAzureCredential
+                    logger.info(f"Using DefaultAzureCredential for Key Vault: {key_vault_name}")
+                    credential = DefaultAzureCredential()
+                
+                client = SecretClient(vault_url=key_vault_uri, credential=credential)
+                
+                secret = client.get_secret("db-password")
+                logger.info("Successfully retrieved DB password from Azure Key Vault")
+                return secret.value
+            except Exception as e:
+                logger.warning(f"Could not retrieve DB password from Key Vault: {e}")
+        
+        # Fall back to environment variable (no default password for security)
+        password = os.getenv('DB_PASSWORD')
+        if not password:
+            logger.error("DB_PASSWORD not found in environment variables or Key Vault")
+            raise ValueError("Database password not configured")
+        return password
         
     async def wait_for_database(self, max_retries=30):
         """Wait for database to be available"""
@@ -32,18 +68,29 @@ class DatabaseInitializer:
                     port=self.db_port,
                     user=self.db_user,
                     password=self.db_password,
-                    database=self.db_name
+                    database=self.db_name,
+                    ssl=self.db_ssl  # Add SSL support
                 )
                 await conn.close()
                 logger.info("✓ Database is ready")
                 return True
             except Exception as e:
                 retry_count += 1
+                # Log the actual error for better debugging
+                error_msg = str(e)
+                if "password authentication failed" in error_msg.lower():
+                    logger.error(f"Database authentication failed: {error_msg}")
+                    logger.error("Check that the password in Key Vault matches the PostgreSQL server password")
+                elif "could not connect" in error_msg.lower() or "timeout" in error_msg.lower():
+                    logger.warning(f"Database connection attempt {retry_count}/{max_retries}: {error_msg}")
+                else:
+                    logger.warning(f"Database not ready ({retry_count}/{max_retries}): {error_msg}")
+                
                 if retry_count < max_retries:
-                    logger.info(f"Database not ready yet. Retrying in 2 seconds... ({retry_count}/{max_retries})")
                     await asyncio.sleep(2)
                 else:
-                    logger.error(f"Failed to connect to database after {max_retries} attempts: {e}")
+                    logger.error(f"Failed to connect to database after {max_retries} attempts")
+                    logger.error(f"Final error: {e}")
                     return False
         return False
         
@@ -224,7 +271,8 @@ class DatabaseInitializer:
                 port=self.db_port,
                 user=self.db_user,
                 password=self.db_password,
-                database=self.db_name
+                database=self.db_name,
+                ssl=self.db_ssl  # Add SSL support
             )
             
             # Adjust legacy schemas before running consolidated migrations
