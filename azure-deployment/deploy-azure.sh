@@ -11,9 +11,9 @@ set -e
 # ========================================
 
 # Azure Configuration
-RESOURCE_GROUP="rg-simplyinspect3"
+RESOURCE_GROUP="rg-simplyinspect1"
 LOCATION="northeurope"
-PREFIX="simplyinspect3"
+PREFIX="simplyinspect1"
 
 # Container Registry (UPDATE THESE WITH YOUR ACR DETAILS)
 ACR_NAME="${PREFIX}acr"  # ACR names cannot contain hyphens

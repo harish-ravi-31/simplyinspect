@@ -13,7 +13,7 @@ async def fix_admin_user():
     
     # Azure database connection
     db_config = {
-        'host': 'simplyinspect3-postgres.postgres.database.azure.com',
+        'host': 'simplyinspect1-postgres.postgres.database.azure.com',
         'port': 5432,
         'user': 'postgres',
         'password': 'SimplyInspect2024',
